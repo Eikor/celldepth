@@ -16,7 +16,8 @@ def parse():
     parser.add_argument('--depth', type=float, default=1)
     parser.add_argument('--grad', type=float, default=1)
     parser.add_argument('--norm', type=float, default=1)
-
+    parser.add_argument('--nonlinear', action='store_true')
+    parser.add_argument('--nonlinear_c', type=float, default=1)
 
     # save dir
     parser.add_argument('--save_dir', type=str, default='./result', help='directory to save record file')

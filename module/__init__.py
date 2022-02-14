@@ -25,7 +25,10 @@ class NN(nn.Module):
         param_depth = args.depth
         param_grad = args.grad
         param_norm = args.norm
-        losses = self.criterion(self.backbone(imgs), gt)
+        if args.nonlinear:
+            losses = self.criterion((args.nonlinear_c*self.backbone(imgs)).sigmoid(), gt)
+        else:
+            losses = self.criterion(self.backbone(imgs), gt)
         loss = param_depth*losses[0] + param_grad*losses[1] + param_norm*losses[2]
         self.optimizer.zero_grad()
         loss.backward()
@@ -100,13 +103,17 @@ class NN(nn.Module):
         for batch in dataset:
             imgs = batch['image'].to(device=torch.device('cuda'))
             gt = batch['label'].to(device=torch.device('cuda'))
-            pred = self.backbone(imgs)
+            if args.nonlinear:
+                pred = (args.nonlinear_c*self.backbone(imgs)).sigmoid()
+            else:
+                pred = self.backbone(imgs)
             loss = torch.abs(gt - pred).mean()
             avg_loss += loss.item() / len(dataset)
-            loss = self.criterion(pred, gt)
+            # loss = self.criterion(pred, gt)
             flow = self.criterion.edge_conv(pred)
-            flow = flow / torch.norm(flow, dim=0, keepdim=True)
-            outputs.append(pred.cpu())
+            flow = flow / torch.norm(flow, dim=1, keepdim=True)
+            flow[(pred<0.01).repeat(1, 2, 1, 1)] = 0
+            outputs.append(flow.cpu())
             dataset.set_postfix({
                 'loss': '{0:1.5f}'.format(loss.item())
                 })

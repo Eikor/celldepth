@@ -43,15 +43,12 @@ class Depth(Dataset):
         '''
         annotations = []
         for prediction in tqdm(predictions, desc='simulating'):
-            prediction = prediction[0].numpy()
-            x_flow = cv.Sobel(prediction, cv.CV_64F, 1, 0)
-            y_flow = cv.Sobel(prediction, cv.CV_64F, 0, 1)
-            norm = np.linalg.norm(np.stack([x_flow, y_flow]), axis=0)
-            norm = np.where(norm==0, 1, norm) 
-            dP = np.stack([y_flow, x_flow]) / norm
-            dP = np.where(prediction<=0, 0, dP)
-            p = metric.follow_flows(-dP, niter=200)
-            maski = metric.get_masks(p, iscell=None, flows=None)
+            inds = np.array(np.nonzero(np.abs(prediction[0])>0)).astype(np.int32).T
+            p_start = torch.stack(torch.meshgrid(torch.arange(predictions.shape[-2]), torch.arange(predictions.shape[-1])))
+            p_start = p_start.cuda()
+            dP = prediction.cuda()
+            p_end, inds = metric.follow_flows_gpu(-dP, p_start, inds=inds, niter=200)
+            maski = metric.get_masks(p_end.cpu().numpy(), iscell=None, flows=None)
             maski = metric.fill_holes_and_remove_small_masks(maski, min_size=80)
             annotations.append(maski)
         return np.array(annotations)

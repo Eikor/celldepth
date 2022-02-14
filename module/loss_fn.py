@@ -10,7 +10,7 @@ class DepthLoss(nn.Module):
         self.edge_conv = nn.Conv2d(1, 2, kernel_size=3, stride=1, padding=1, bias=False)
         edge_kx = np.array([[1, 0, -1], [2, 0, -2], [1, 0, -1]])
         edge_ky = np.array([[1, 2, 1], [0, 0, 0], [-1, -2, -1]])
-        edge_k = np.stack((edge_kx, edge_ky))
+        edge_k = np.stack((edge_ky, edge_kx))
 
         edge_k = torch.from_numpy(edge_k).float().view(2, 1, 3, 3)
         self.edge_conv.weight = nn.Parameter(edge_k)
@@ -31,7 +31,8 @@ class DepthLoss(nn.Module):
         gt_grad = self.edge_conv(y)
         norm = torch.cat((-grad, torch.ones_like(grad[:, 0:1, :, :])), 1)
         gt_norm = torch.cat((-gt_grad, torch.ones_like(grad[:, 0:1, :, :])), 1)
-        loss_depth = torch.abs(y_hat - y) / y
+        mask = torch.where(y>0, y+0.01, torch.ones_like(y))
+        loss_depth = torch.mean(torch.abs(y_hat - y) / mask)
         loss_grad = torch.log(torch.abs(grad - gt_grad) + 0.5).mean()
         loss_normal = torch.abs(1 - self.cos(norm, gt_norm)).mean()
 

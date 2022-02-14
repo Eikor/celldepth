@@ -9,6 +9,8 @@ from numba import njit, jit, float32, int32, vectorize
 from scipy.optimize import linear_sum_assignment
 import colorsys
 import cv2
+import torch
+import fastremap
 
 @jit(nopython=True)
 def _label_overlap(x, y):
@@ -122,73 +124,55 @@ def steps2D(p, dP, inds, niter):
             p[1,y,x] = min(shape[1]-1, max(0, p[1,y,x] - dP[1,p0,p1]))
     return p
 
-def steps2D_interp(p, dP, niter, use_gpu=False, device=None, omni=False, calc_trace=False):
+def steps2D_interp(p, dP, niter, device=None, calc_trace=False):
     shape = dP.shape[1:]
-    if use_gpu and TORCH_ENABLED:
-        if device is None:
-            device = torch_GPU
-        shape = np.array(shape)[[1,0]].astype('double')-1  # Y and X dimensions (dP is 2.Ly.Lx), flipped X-1, Y-1
-        pt = torch.from_numpy(p[[1,0]].T).double().to(device).unsqueeze(0).unsqueeze(0) # p is n_points by 2, so pt is [1 1 2 n_points]
-        im = torch.from_numpy(dP[[1,0]]).double().to(device).unsqueeze(0) #covert flow numpy array to tensor on GPU, add dimension 
-        # normalize pt between  0 and  1, normalize the flow
-        for k in range(2): 
-            im[:,k,:,:] *= 2./shape[k]
-            pt[:,:,:,k] /= shape[k]
-            
-        # normalize to between -1 and 1
-        pt = pt*2-1 
+    if device is None:
+        device = torch.device('cuda')
+    shape = np.array(shape)[[1,0]].astype('double')-1  # Y and X dimensions (dP is 2.Ly.Lx), flipped X-1, Y-1
+    pt = p[[1,0]].T.double().to(device).unsqueeze(0).unsqueeze(0) # p is n_points by 2, so pt is [1 1 2 n_points]
+    im = dP[[1,0]].double().to(device).unsqueeze(0) #covert flow numpy array to tensor on GPU, add dimension 
+    # normalize pt between  0 and  1, normalize the flow
+    for k in range(2): 
+        im[:,k,:,:] *= 2./shape[k]
+        pt[:,:,:,k] /= shape[k]
         
-        # make an array to track the trajectories 
+    # normalize to between -1 and 1
+    pt = pt*2-1 
+    
+    # make an array to track the trajectories 
+    if calc_trace:
+        trace = torch.clone(pt).detach()
+    
+    #here is where the stepping happens
+    for t in range(niter):
         if calc_trace:
-            trace = torch.clone(pt).detach()
+            trace = torch.cat((trace,pt))
+        # align_corners default is False, just added to suppress warning
+        dPt = torch.nn.functional.grid_sample(im, pt, align_corners=False)
         
-        #here is where the stepping happens
-        for t in range(niter):
-            if calc_trace:
-                trace = torch.cat((trace,pt))
-            # align_corners default is False, just added to suppress warning
-            dPt = torch.nn.functional.grid_sample(im, pt, align_corners=False)
-            if omni and OMNI_INSTALLED:
-                dPt /= step_factor(t)
-            
-            for k in range(2): #clamp the final pixel locations
-                pt[:,:,:,k] = torch.clamp(pt[:,:,:,k] + dPt[:,k,:,:], -1., 1.)
-            
+        for k in range(2): #clamp the final pixel locations
+            pt[:,:,:,k] = torch.clamp(pt[:,:,:,k] + dPt[:,k,:,:], -1., 1.)
+        
 
-        #undo the normalization from before, reverse order of operations 
-        pt = (pt+1)*0.5
-        for k in range(2): 
-            pt[:,:,:,k] *= shape[k]
-            
-        if calc_trace:
-            trace = (trace+1)*0.5
-            for k in range(2): 
-                trace[:,:,:,k] *= shape[k]
-                
-        #pass back to cpu
-        if calc_trace:
-            tr =  trace[:,:,:,[1,0]].cpu().numpy().squeeze().T
-        else:
-            tr = None
+    #undo the normalization from before, reverse order of operations 
+    pt = (pt+1)*0.5
+    for k in range(2): 
+        pt[:,:,:,k] *= shape[k]
         
-        p =  pt[:,:,:,[1,0]].cpu().numpy().squeeze().T
-        return p, tr
-    else:
-        dPt = np.zeros(p.shape, np.float32)
-        if calc_trace:
-            tr = np.zeros((p.shape[0],p.shape[1],niter))
-        else:
-            tr = None
+    # if calc_trace:
+    #     trace = (trace+1)*0.5
+    #     for k in range(2): 
+    #         trace[:,:,:,k] *= shape[k]
             
-        for t in range(niter):
-            if calc_trace:
-                tr[:,:,t] = p.copy()
-            map_coordinates(dP.astype(np.float32), p[0], p[1], dPt)
-            if omni and OMNI_INSTALLED:
-                dPt /= step_factor(t)
-            for k in range(len(p)):
-                p[k] = np.minimum(shape[k]-1, np.maximum(0, p[k] + dPt[k]))
-        return p, tr
+    # #pass back to cpu
+    # if calc_trace:
+    #     tr =  trace[:,:,:,[1,0]].cpu().numpy().squeeze().T
+    # else:
+    #     tr = None
+    
+    p =  pt[:,:,:,[1,0]].squeeze().T
+    return p
+
 
 def follow_flows(dP, niter=200):
     """ define pixels and run dynamics to recover masks in 2D
@@ -220,6 +204,69 @@ def follow_flows(dP, niter=200):
     inds = np.array(np.nonzero(np.abs(dP[0])>1e-3)).astype(np.int32).T
     p = steps2D(p, dP.astype('float32'), inds, niter)
     return p
+
+def follow_flows_gpu(dP, p, mask=None, inds=None, niter=200, device=None, calc_trace=False):
+    """ define pixels and run dynamics to recover masks in 2D
+    
+    Pixels are meshgrid. Only pixels with non-zero cell-probability
+    are used (as defined by inds)
+    Parameters
+    ----------------
+    dP: float32, 3D or 4D array
+        flows [axis x Ly x Lx] or [axis x Lz x Ly x Lx]
+    
+    mask: (optional, default None)
+        pixel mask to seed masks. Useful when flows have low magnitudes.
+    niter: int (optional, default 200)
+        number of iterations of dynamics to run
+    interp: bool (optional, default True)
+        interpolate during 2D dynamics (not available in 3D) 
+        (in previous versions + paper it was False)
+    use_gpu: bool (optional, default False)
+        use GPU to run interpolated dynamics (faster than CPU)
+    Returns
+    ---------------
+    p: float32, 3D array
+        final locations of each pixel after dynamics
+    """
+    # shape = np.array(dP.shape[1:]).astype(np.int32)
+    niter = np.uint32(niter)
+    # p = np.meshgrid(np.arange(shape[0]), np.arange(shape[1]), indexing='ij')
+    # not sure why, but I had changed this to float64 at some point... tests showed that map_coordinates expects float32
+    # possible issues elsewhere? 
+    # p = np.array(p).astype(np.float32)
+
+    # added inds for debugging while preserving backwards compatibility 
+    if inds is None:
+        inds = np.array(np.nonzero(np.abs(dP[0])>1e-3)).astype(np.int32).T
+    
+    p_interp = steps2D_interp(p[:,inds[0], inds[1]], dP, niter,
+                                    device=device, calc_trace=calc_trace)
+    
+    p[:,inds[0],inds[1]] = p_interp.long()
+    return p, inds
+
+def compute_masks(dP, cellprob, bd=None, p=None, inds=None, niter=200, mask_threshold=0.0, diam_threshold=12.,
+                   flow_threshold=0.4, interp=True, do_3D=False, 
+                   min_size=15, resize=None, verbose=False,
+                   use_gpu=False,device=None,nclasses=3):
+    """ compute masks using dynamics from dP, cellprob, and boundary """
+    
+    cp_mask = cellprob > mask_threshold # analog to original iscell=(cellprob>cellprob_threshold)
+
+    if np.any(cp_mask): #mask at this point is a cell cluster binary map, not labels     
+        # follow flows
+        if p is None:
+            p , inds, tr = follow_flows(dP * cp_mask / 5., mask=cp_mask, inds=inds, niter=niter, interp=interp, 
+                                            use_gpu=use_gpu, device=device)
+        
+        #calculate masks
+        mask = get_masks(p, iscell=cp_mask, flows=dP, use_gpu=use_gpu)
+
+    mask = mask.astype(np.uint16)
+    mask = fill_holes_and_remove_small_masks(mask, min_size=min_size)
+
+    return mask, p, []
 
 def fill_holes_and_remove_small_masks(masks, min_size=20):
     """ fill holes in masks (2D/3D) and discard masks smaller than min_size (2D)
@@ -273,40 +320,32 @@ def hsv_to_rgb(arr):
     rgb = np.stack((r,g,b), axis=-1)
     return rgb
 
-def get_masks(p, iscell=None, rpad=20, flows=None, threshold=0.4):
+def get_masks(p, iscell=None, rpad=20, flows=None, threshold=0.4, use_gpu=False, device=None):
     """ create masks using pixel convergence after running dynamics
     
     Makes a histogram of final pixel locations p, initializes masks 
     at peaks of histogram and extends the masks from the peaks so that
     they include all pixels with more than 2 final pixels p. Discards 
     masks with flow errors greater than the threshold. 
-
     Parameters
     ----------------
-
     p: float32, 3D or 4D array
         final locations of each pixel after dynamics,
         size [axis x Ly x Lx] or [axis x Lz x Ly x Lx].
-
     iscell: bool, 2D or 3D array
         if iscell is not None, set pixels that are 
         iscell False to stay in their original location.
-
     rpad: int (optional, default 20)
         histogram edge padding
-
     threshold: float (optional, default 0.4)
         masks with flow error greater than threshold are discarded 
         (if flows is not None)
-
     flows: float, 3D or 4D array (optional, default None)
         flows [axis x Ly x Lx] or [axis x Lz x Ly x Lx]. If flows
         is not None, then masks with inconsistent flows are removed using 
         `remove_bad_flow_masks`.
-
     Returns
     ---------------
-
     M0: int, 2D or 3D array
         masks with inconsistent flow masks removed, 
         0=NO masks; 1,2,...=mask labels,
@@ -374,27 +413,22 @@ def get_masks(p, iscell=None, rpad=20, flows=None, threshold=0.4):
             if iter==4:
                 pix[k] = tuple(pix[k])
     
-    M = np.zeros(h.shape, np.int32)
+    M = np.zeros(h.shape, np.uint32)
     for k in range(len(pix)):
         M[pix[k]] = 1+k
         
     for i in range(dims):
         pflows[i] = pflows[i] + rpad
     M0 = M[tuple(pflows)]
-    
-    # remove big masks
-    _,counts = np.unique(M0, return_counts=True)
-    big = np.prod(shape0) * 0.4
-    for i in np.nonzero(counts > big)[0]:
-        M0[M0==i] = 0
-    _,M0 = np.unique(M0, return_inverse=True)
-    M0 = np.reshape(M0, shape0)
- 
-    if threshold is not None and threshold > 0 and flows is not None:
-        M0 = remove_bad_flow_masks(M0, flows, threshold=threshold)
-        _,M0 = np.unique(M0, return_inverse=True)
-        M0 = np.reshape(M0, shape0).astype(np.int32)
 
+    # remove big masks
+    uniq, counts = fastremap.unique(M0, return_counts=True)
+    big = np.prod(shape0) * 0.4
+    bigc = uniq[counts > big]
+    if len(bigc) > 0 and (len(bigc)>1 or bigc[0]!=0):
+        M0 = fastremap.mask(M0, bigc)
+    fastremap.renumber(M0, in_place=True) #convenient to guarantee non-skipped labels
+    M0 = np.reshape(M0, shape0)
     return M0
 
 def metric(preds:np.ndarray, gt:np.ndarray, thresh):
