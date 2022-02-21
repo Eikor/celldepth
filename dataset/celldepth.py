@@ -14,7 +14,7 @@ class Depth(Dataset):
         self.annotations = np.load(annotation_url)
         self.labels = np.load(label_url)
         self.images = np.load(image_url)
-
+        self.pose_url = os.path.split(label_url)[0] + '/pose_label'
         self.CROP_SIZE = 320
         if not Aug:
             self.CROP_SIZE = -1
@@ -46,7 +46,7 @@ class Depth(Dataset):
             inds = np.array(np.nonzero(np.abs(prediction[0])>0)).astype(np.int32).T
             p_start = torch.stack(torch.meshgrid(torch.arange(predictions.shape[-2]), torch.arange(predictions.shape[-1])))
             p_start = p_start.cuda()
-            dP = prediction.cuda()
+            dP = prediction.cuda()[[1, 0]]
             p_end, inds = metric.follow_flows_gpu(-dP, p_start, inds=inds, niter=2000)
             maski = metric.get_masks(p_end.cpu().numpy(), iscell=None, flows=None)
             maski = metric.fill_holes_and_remove_small_masks(maski, min_size=80)
@@ -110,11 +110,17 @@ class Depth(Dataset):
 
     def __getitem__(self, index):
         image = self.images[index]
-        label = self.labels[index]
+        depth = self.labels[index]
+        
         if len(image.shape) == 2:
             image = image[None, :, :]
-        if len(label.shape) == 2:
-            label = label[None, :, :]
+        if len(depth.shape) == 2:
+            depth = depth[None, :, :]
+        flow_url = os.path.join(self.pose_url, f'{index}.npy')
+        flow = np.load(flow_url)[1:]
+        if len(flow.shape) == 4:
+            flow = flow[0]
+        label = np.concatenate([depth, flow], axis=0)
         image, label = self.crop(image, label)
         return {
             'image': torch.FloatTensor(image),
