@@ -437,8 +437,8 @@ def metric(preds:np.ndarray, gt:np.ndarray, thresh):
         preds: n*H*W [mask1, mask2, ...]
         gt:n*H*W
     '''
-    preds = preds.squeeze()
-    gt = gt.squeeze()
+    # preds = preds.squeeze()
+    # gt = gt.squeeze()
     stats = []
 
     for pred, true in zip(preds, gt):

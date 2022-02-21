@@ -47,7 +47,7 @@ class Depth(Dataset):
             p_start = torch.stack(torch.meshgrid(torch.arange(predictions.shape[-2]), torch.arange(predictions.shape[-1])))
             p_start = p_start.cuda()
             dP = prediction.cuda()
-            p_end, inds = metric.follow_flows_gpu(-dP, p_start, inds=inds, niter=200)
+            p_end, inds = metric.follow_flows_gpu(-dP, p_start, inds=inds, niter=2000)
             maski = metric.get_masks(p_end.cpu().numpy(), iscell=None, flows=None)
             maski = metric.fill_holes_and_remove_small_masks(maski, min_size=80)
             annotations.append(maski)
@@ -77,17 +77,17 @@ class Depth(Dataset):
             test_url = args.save_dir + '/test'
             os.makedirs(test_url, exist_ok=True)
             plot.plot_mask(self.images, masks, gt_masks, test_url)
-        import matplotlib.pyplot as plt
-        pred_url = args.save_dir + '/pred'
-        os.makedirs(pred_url, exist_ok=True)
-        for i, (pred, label) in enumerate(zip(prediction, self.labels)):
-            plt.figure(figsize=(16, 6), dpi=200)
-            plt.subplot(1, 2, 1)
-            plt.imshow(pred[0], cmap='plasma')
-            plt.subplot(1, 2, 2)
-            plt.imshow(label, cmap='plasma')
-            plt.savefig(pred_url+f'/{i}.png')
-            break
+        # import matplotlib.pyplot as plt
+        # pred_url = args.save_dir + '/pred'
+        # os.makedirs(pred_url, exist_ok=True)
+        # for i, (pred, label) in enumerate(zip(prediction, self.labels)):
+        #     plt.figure(figsize=(16, 6), dpi=200)
+        #     plt.subplot(1, 2, 1)
+        #     plt.imshow(pred[0], cmap='plasma')
+        #     plt.subplot(1, 2, 2)
+        #     plt.imshow(label, cmap='plasma')
+        #     plt.savefig(pred_url+f'/{i}.png')
+        #     break
         stats = np.array(stats)
         return stats, masks
 

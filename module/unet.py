@@ -45,8 +45,6 @@ def get_gaussian_filter(kernel_size=3, sigma=2, channels=3):
     
     return gaussian_filter
 
-
-
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
     
@@ -219,3 +217,37 @@ class UNet(nn.Module):
         self.up3.update_kernels(kernel_size, std)
         self.up4.update_kernels(kernel_size, std)
 
+class Aux_net(nn.Module):
+    def __init__(self, n_channels=1, n_classes=1, bilinear=True, aux_channel=8):
+        super(Aux_net, self).__init__()
+        # self.smooth = smooth
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+        self.bilinear = bilinear
+        aux_channels = 2**torch.arange(5)*aux_channel
+        # self.deep_offset = False
+        self.inc = DoubleConv(n_channels, aux_channel)
+        self.down1 = Down(aux_channels[0], aux_channels[1], False, smooth=False)
+        self.down2 = Down(aux_channels[1], aux_channels[2], False, smooth=False)
+        self.down3 = Down(aux_channels[2], aux_channels[3], False, smooth=False)
+        factor = 2 if bilinear else 1
+        self.down4 = Down(aux_channels[3], aux_channels[4] // factor, smooth=False)
+        self.up1 = Up(aux_channels[4], aux_channels[3] // factor, bilinear, smooth=False)
+        self.up2 = Up(aux_channels[3], aux_channels[2] // factor, bilinear, smooth=False)
+        self.up3 = Up(aux_channels[2], aux_channels[1] // factor, bilinear, smooth=False)
+        self.up4 = Up(aux_channels[1], aux_channels[0], bilinear, smooth=False)
+        self.outc = OutConv(aux_channels[0], n_classes)
+
+    
+    def forward(self, x):
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+        x6 = self.up1(x5, x4)
+        x = self.up2(x6, x3)
+        x = self.up3(x, x2)
+        x = self.up4(x, x1)
+        logits = self.outc(x)
+        return logits

@@ -4,12 +4,15 @@ import numpy as np
 def plot_mask(images, masks, gt_masks, url):
     for i, (mask, gt_mask) in enumerate(zip(masks, gt_masks)):
         img = images[i]
-        img_channels = img.shape[0]
-        if img_channels == 1:
-            img = cv2.cvtColor((img.transpose(1, 2, 0)*255).astype('uint8'), cv2.COLOR_GRAY2RGB)
-        elif img_channels == 2:
-            zeros = np.zeros_like(img[0:1])
-            img = np.concatenate([img, zeros]).transpose(1, 2, 0)
+        if len(img.shape) == 3:
+            img_channels = img.shape[0]
+            if img_channels == 1:
+                img = cv2.cvtColor((img.transpose(1, 2, 0)*255).astype('uint8'), cv2.COLOR_GRAY2RGB)
+            elif img_channels == 2:
+                zeros = np.zeros_like(img[0:1])
+                img = np.concatenate([img, zeros]).transpose(1, 2, 0)
+        else:
+            img = cv2.cvtColor((img*255).astype('uint8'), cv2.COLOR_GRAY2RGB)
         canvas = img
         mask_ = img
         mask_[mask>0, 2] = 255

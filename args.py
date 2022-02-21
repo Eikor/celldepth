@@ -11,6 +11,9 @@ def parse():
     parser.add_argument('--save_interval', type=int, default=10)
     
     # net
+    parser.add_argument('--aux', action='store_true')
+    parser.add_argument('--aux_channels', type=int, default=8)
+
     parser.add_argument('--num_channels', type=int, default=1)
     parser.add_argument('--num_classes', type=int, default=1)
     parser.add_argument('--depth', type=float, default=1)
