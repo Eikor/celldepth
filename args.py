@@ -1,6 +1,7 @@
 import argparse
 import time
 import os
+import yaml
 
 def parse():
     parser = argparse.ArgumentParser()
@@ -62,7 +63,13 @@ def get_args(mode):
     if args.mode == 'test':
         assert args.test_url is not None
         args.save_dir = args.test_url
-        args.nn_path = os.path.join(args.save_dir, 'epoch_100.pth')
+        args.nn_path = os.path.join(args.save_dir, 'epoch_80.pth')
+        with open(args.save_dir+'/wandb/latest-run/files/config.yaml', 'r') as f:
+            settings = yaml.load(f.read())
+            args.aux = settings['aux']['value']
+            args.aux_channels = settings['aux_channels']['value']
+            args.nonlinear = settings['nonlinear']['value']
+            args.nonlinear_c = settings['nonlinear_c']['value']
     else:
         args.save_dir = 'result/' + time.strftime('%m_%d_%H_%M_%S',time.localtime(int(round(time.time()))))
     try:

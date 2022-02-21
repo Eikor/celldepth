@@ -157,6 +157,8 @@ class Aux_Net(nn.Module):
         self.flow_loss = loss_fn.FlowLoss(args)
         self.depth_optim = optim.Adam(self.backbone.parameters(), lr=args.lr)
         self.flow_optim = optim.Adam(self.aux_net.parameters(), lr=args.lr)
+        self.non_linear = args.nonlinear
+        self.c = args.nonlinear_c
         print('Done.')
 
     def train_step(self, batch, args):
@@ -167,7 +169,11 @@ class Aux_Net(nn.Module):
         param_norm = args.norm
         depth = self.backbone(imgs)
         depth_loss = self.depth_loss(depth, gt)
-        flow_loss = self.flow_loss(self.aux_net(torch.cat([imgs, depth], dim=1)), gt)
+        if self.non_linear:
+            flow = torch.tanh(self.c * self.aux_net(torch.cat([imgs, depth], dim=1)))
+        else:
+            flow = self.aux_net(torch.cat([imgs, depth], dim=1))
+        flow_loss = self.flow_loss(flow, gt)
         losses = [depth_loss, flow_loss]
         loss = depth_loss + flow_loss
         self.depth_optim.zero_grad()
@@ -246,8 +252,8 @@ class Aux_Net(nn.Module):
             imgs = batch['image'].to(device=torch.device('cuda'))
             gt = batch['label'].to(device=torch.device('cuda'))
             flow_input = torch.cat([imgs, self.backbone(imgs)], dim=1)
-            if args.nonlinear:
-                pred = (args.nonlinear_c*self.aux_net(flow_input)).sigmoid()
+            if self.non_linear:
+                pred = torch.tanh(self.c*self.aux_net(flow_input))
             else:
                 pred = self.aux_net(flow_input)
             

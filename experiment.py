@@ -39,7 +39,11 @@ if args.mode == 'test':
     test_set = dataset.load_test_dataset(args)
     test_loader = DataLoader(test_set, batch_size=12)
     state_dict = torch.load(args.nn_path)
-    # net.backbone.load_state_dict(state_dict['model_state_dict'])
+    if args.aux:
+        net.backbone.load_state_dict(state_dict['unet_state_dict'])
+        net.aux_net.load_state_dict(state_dict['aux_state_dict'])
+    else:
+        net.backbone.load_state_dict(state_dict['model_state_dict'])
     stats, masks = net.eval(test_loader, 0, args)
     print(np.mean(stats, axis=0))
     np.savetxt(args.save_dir+'/performance.txt', stats)
